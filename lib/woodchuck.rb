@@ -13,17 +13,22 @@ module Woodchuck
       @maps = {}
     end
 
-    def add(doc)
-      id = @redis.incr("wchk:nextid")
-      @redis.set("wchk:doc:#{id}", JSON.dump(doc.merge('_id' => id)))
+    def put(doc)
+      id = doc['_id'] ||= @redis.incr("wchk:nextid")
+      @redis.set("wchk:doc:#{id}", JSON.dump(doc))
       @maps.keys.each do |map_name|
         @redis.sadd("wchk:pend:#{map_name}", id)
       end
       id
     end
 
+    def delete(id)
+      @redis.del("wchk:doc:#{id}")
+    end
+
     def get(id)
-      JSON.parse(@redis.get("wchk:doc:#{id}"))
+      json = @redis.get("wchk:doc:#{id}")
+      JSON.parse(json) if json
     end
 
     def map(map_name, map_function)
@@ -57,6 +62,12 @@ module Woodchuck
       repair(map_name)
       @redis.zrange("wchk:map:#{map_name}", first, last).map do |doc|
         JSON.parse(doc)
+      end
+    end
+
+    def truncate
+      @redis.keys("wchk:*").each do |key|
+        @redis.del(key)
       end
     end
 
