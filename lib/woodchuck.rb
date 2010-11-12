@@ -1,8 +1,12 @@
-require 'rubygems'
-require 'redis'
-require 'system_timer'
-require 'uuidtools'
-require 'json'
+begin
+  require 'redis'
+  require 'system_timer'
+  require 'json'
+  require 'v8'
+rescue LoadError => e
+  retry if require 'rubygems'
+  raise e
+end
 
 module Woodchuck
   class Database
@@ -14,16 +18,17 @@ module Woodchuck
     end
 
     def put(doc)
-      id = doc['_id'] ||= @redis.incr("wchk:nextid")
-      @redis.set("wchk:doc:#{id}", JSON.dump(doc))
-      @maps.keys.each do |map_name|
-        @redis.sadd("wchk:pend:#{map_name}", id)
-      end
+      id = store(doc)
+      @maps.keys.each { |map_name| @redis.sadd("wchk:pend:#{map_name}", id) }
       id
     end
 
     def delete(id)
       @redis.del("wchk:doc:#{id}")
+      @maps.keys.each do |map_name|
+        @redis.srem("wchk:pend:#{map_name}", id)
+        @redis.sadd("wchk:penddel:#{map_name}", id) #XXX can we use SMOVE?
+      end
     end
 
     def get(id)
@@ -49,8 +54,8 @@ module Woodchuck
       else
         start_rank = end_rank = Woodchuck.key_to_rank(key)
       end
-      @redis.zrangebyscore("wchk:map:#{map_name}", start_rank, end_rank).map do |doc|
-        JSON.parse(doc)
+      @redis.zrangebyscore("wchk:map:#{map_name}", start_rank, end_rank).map do |id|
+        get(id)
       end
     end
 
@@ -60,8 +65,8 @@ module Woodchuck
       first = offset
       last = limit ? offset+limit-1 : -1
       repair(map_name)
-      @redis.zrange("wchk:map:#{map_name}", first, last).map do |doc|
-        JSON.parse(doc)
+      @redis.zrange("wchk:map:#{map_name}", first, last).map do |id|
+        get(id)
       end
     end
 
@@ -73,14 +78,26 @@ module Woodchuck
 
     private
 
+    def store(doc)
+      id = doc['_id'] ||= @redis.incr("wchk:nextid")
+      @redis.set("wchk:doc:#{id}", JSON.dump(doc))
+      id
+    end
+
     def repair(map_name)
+      while id = @redis.spop("wchk:penddel:#{map_name}")
+        while value_id = @redis.spop("wchk:metamap:#{map_name}:#{id}")
+          @redis.zrem("wchk:map:#{map_name}", value_id)
+        end
+      end
+
       map = load_map(map_name)
-      parallelize(4) do
-        while id = @redis.spop("wchk:pend:#{map_name}")
-          doc = get(id)
-          map.consume(doc) do |rank, value|
-            @redis.zadd("wchk:map:#{map_name}", rank, JSON.dump(value))
-          end
+      while id = @redis.spop("wchk:pend:#{map_name}")
+        doc = get(id)
+        map.consume(doc) do |rank, value|
+          value_id = store(value)
+          @redis.zadd("wchk:map:#{map_name}", rank, value_id)
+          @redis.sadd("wchk:metamap:#{map_name}:#{id}", value_id)
         end
       end
     end
@@ -114,11 +131,19 @@ module Woodchuck
   class Map
     def initialize(name, map_function_source)
       @name = name
-      map_function_proc = eval(map_function_source) #FIXME danger!
-      (class <<self ; self ; end).module_eval do
-        define_method(:perform, &map_function_proc)
-        private :perform
+      @context = V8::Context.new
+      @context['emit'] = lambda do |key, value|
+        hash = {}
+        value.each do |name, content|
+          hash[name] = content
+        end
+        emit(key, hash)
       end
+      @map_function = @context.eval("f = #{map_function_source}")
+    end
+
+    def perform(document)
+      @map_function.call(document)
     end
 
     def consume(document)
