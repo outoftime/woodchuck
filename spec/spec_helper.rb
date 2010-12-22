@@ -5,11 +5,12 @@ rescue LoadError => e
   raise e
 end
 
-require File.expand_path('../../lib/woodchuck', __FILE__)
+$: << File.expand_path('../../lib', __FILE__)
+require 'woodchuck/client'
 
 Spec::Runner.configure do |config|
   config.before(:each) do
-    @db = Woodchuck::Database.new
+    @db = Woodchuck::Client.new
     @db.truncate
   end
 end

@@ -1,0 +1,6 @@
+#!/usr/bin/env ruby
+
+$: << File.expand_path('../../lib', __FILE__)
+require 'woodchuck/server'
+
+EM.run { EM.start_server('localhost', 9012, Woodchuck::Server) }

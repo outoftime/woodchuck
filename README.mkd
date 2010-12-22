@@ -1,0 +1,5 @@
+# Woodchuck
+
+Woodchuck is an experiment in building a data store which performs fast queries
+on arbitrary parameters through distributed materialized map-reduce. It is
+backed by Redis.

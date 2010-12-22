@@ -3,7 +3,7 @@ require File.expand_path('../spec_helper', __FILE__)
 describe 'Woodchuck' do
   describe 'basic CRUD' do
     before :each do
-      @id = @db.put('name' => 'foo')
+      @id = @db.add('name' => 'foo')
     end
 
     it 'allows creation of documents' do
@@ -16,7 +16,7 @@ describe 'Woodchuck' do
     end
 
     it 'allows updates' do
-      @db.put('_id' => @id, 'name' => 'bar')
+      @db.update(@id, 'name' => 'bar')
       @db.get(@id)['name'].should == 'bar'
     end
   end
@@ -24,11 +24,9 @@ describe 'Woodchuck' do
   describe 'get all for map' do
     before :each do
       @ids = []
-      @ids << @db.put('name' => 'foo', 'category' => 'pizza')
-      @ids << @db.put('name' => 'bar', 'category' => 'ice cream')
-      @db.map(:by_category, <<-JAVASCRIPT)
-        function(doc) { emit(doc.category, doc); }
-      JAVASCRIPT
+      @ids << @db.add('name' => 'foo', 'category' => 'pizza')
+      @ids << @db.add('name' => 'bar', 'category' => 'ice cream')
+      @db.map(:by_category, 'function(doc) { emit(doc.category, doc); }')
     end
 
     it 'returns all documents in lexical key order' do
@@ -64,7 +62,7 @@ describe 'Woodchuck' do
 
     it 'remaps when document updated after materialization' do
       @db.all(:by_category)
-      @db.put('_id' => @ids.last, 'name' => 'bar', 'category' => 'sushi')
+      @db.update('_id' => @ids.last, 'name' => 'bar', 'category' => 'sushi')
       @db.all(:by_category).map do |doc|
         doc['name']
       end.should == %w(foo bar)

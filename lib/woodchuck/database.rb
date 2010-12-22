@@ -1,7 +1,6 @@
 begin
   require 'redis'
   require 'system_timer'
-  require 'json'
   require 'v8'
 rescue LoadError => e
   retry if require 'rubygems'
@@ -12,18 +11,29 @@ module Woodchuck
   class Database
     attr_reader :redis
 
-    def initialize(redis = Redis.new)
-      @redis = redis
+    def initialize(redis = Redis.new, log = Logger.new($stdout, Logger::DEBUG))
+      @redis, @log = redis, log
       @maps = {}
     end
 
-    def put(doc)
+    def add(doc)
+      @log.info("ADD")
       id = store(doc)
       @maps.keys.each { |map_name| @redis.sadd("wchk:pend:#{map_name}", id) }
       id
     end
 
+    def update(id, doc)
+      @log.info("UPDATE #{id}")
+      store(id, doc)
+      @maps.keys.each do |map_name|
+        @redis.sadd("wchk:pend:#{map_name}", id)
+        @redis.sadd("wchk:penddel:#{map_name}", id) #XXX can we use SMOVE?
+      end
+    end
+
     def delete(id)
+      @log.info("DELETE #{id}")
       @redis.del("wchk:doc:#{id}")
       @maps.keys.each do |map_name|
         @redis.srem("wchk:pend:#{map_name}", id)
@@ -32,11 +42,12 @@ module Woodchuck
     end
 
     def get(id)
-      json = @redis.get("wchk:doc:#{id}")
-      JSON.parse(json) if json
+      @log.info("GET #{id}")
+      @redis.get("wchk:doc:#{id}")
     end
 
     def map(map_name, map_function)
+      @log.info("MAP #{map_name}")
       @redis.set("wchk:mapfunc:#{map_name}", map_function)
       load_map(map_name)
       each_doc_id do |id|
@@ -45,6 +56,7 @@ module Woodchuck
     end
 
     def lookup(map_name, key, limit = -1)
+      @log.info("LOOKUP #{map_name}")
       repair(map_name)
       start_rank, end_rank = nil, nil
       case key
@@ -60,6 +72,7 @@ module Woodchuck
     end
 
     def all(map_name, options = {})
+      @log.info("ALL #{map_name}")
       offset = options[:offset] || 0
       limit = options[:limit]
       first = offset
@@ -71,6 +84,7 @@ module Woodchuck
     end
 
     def truncate
+      @log.info("TRUNCATE")
       @redis.keys("wchk:*").each do |key|
         @redis.del(key)
       end
@@ -78,9 +92,9 @@ module Woodchuck
 
     private
 
-    def store(doc)
-      id = doc['_id'] ||= @redis.incr("wchk:nextid")
-      @redis.set("wchk:doc:#{id}", JSON.dump(doc))
+    def store(doc, id = nil)
+      id ||= @redis.incr("wchk:nextid")
+      @redis.set("wchk:doc:#{id}", doc)
       id
     end
 
